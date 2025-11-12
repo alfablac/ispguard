@@ -1,33 +1,37 @@
-<!doctype html>
-<html lang="pt-BR">
+<!DOCTYPE html>
+<html>
 <head>
   <meta charset="utf-8">
   <title>Configurações do ISP Guard v2</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body class="page">
-  <div class="card">
+  <div class="card wide">
     <h1>Configuração do ISP Guard</h1>
-    <label>Domínios Protegidos (um por linha):</label>
-    <textarea id="domains" rows="4" placeholder="exemplo.com&#10;paypal.com"></textarea>
-    <div class="row">
-      <button id="detect">Detectar Rede Atual</button>
-    </div>
+    
+    <label for="domains">Domínios Protegidos (um por linha):</label>
+    <textarea id="domains" rows="8" placeholder="exemplo.com&#10;subdomain.example.com&#10;outro-site.com"></textarea>
+    
+    <button type="button" id="detect" style="margin-bottom: 20px;">Detectar Rede Atual</button>
+    
     <div id="detected">
       <p><b>IPv4 Detectado:</b> <span id="ipv4">-</span></p>
       <p><b>IPv6 Detectado:</b> <span id="ipv6">-</span></p>
       <p><b>ISP Detectado:</b> <span id="isp">-</span></p>
     </div>
-
-    <label><input type="checkbox" id="dynamic"> Meu IP é dinâmico (verificar apenas ISP)</label>
-
-    <div class="buttons">
-      <button id="save">Salvar</button>
+    
+    <div class="row" style="display: flex; align-items: center;">
+      <input type="checkbox" id="dynamic">
+      <label for="dynamic" style="margin: 0;">Meu IP é dinâmico (verificar apenas ISP)</label>
     </div>
-
+    
+    <div class="buttons">
+      <button type="button" id="save">Salvar</button>
+    </div>
+    
     <div id="status"></div>
   </div>
-
+  
   <script src="options.js"></script>
 </body>
 </html>

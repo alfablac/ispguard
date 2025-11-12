@@ -1,33 +1,29 @@
 {
-  "manifest_version": 3,
+  "manifest_version": 2,
   "name": "ISP Guard v2",
-  "version": "1.0.4",
+  "version": "2.0.2",
   "description": "Bloqueia navegação para domínios especificados a menos que você esteja no seu IP/ISP residencial.",
   "permissions": [
     "storage",
     "webRequest",
-    "webNavigation",
-    "tabs"
-  ],
-  "host_permissions": [
-    "<all_urls>",
-    "https://ipapi.co/*",
-    "https://ipify.org/*",
-    "https://api64.ipify.org/*",
-    "https://ifconfig.co/*",
-    "https://ipwho.is/*"
+    "webRequestBlocking",
+    "tabs",
+    "<all_urls>"
   ],
   "background": {
-    "service_worker": "background.js"
+    "scripts": ["background.js"],
+    "persistent": true
   },
-  "action": {
+  "browser_action": {
     "default_title": "Configurações do ISP Guard"
   },
-  "options_page": "options.html",
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
   "web_accessible_resources": [
-    {
-      "resources": ["blocked.html", "blocked.js", "style.css", "options.js"],
-      "matches": ["<all_urls>"]
-    }
+    "blocked.html",
+    "blocked.js",
+    "style.css"
   ]
 }

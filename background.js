@@ -1,3 +1,8 @@
+// STARTUP LOG - THIS SHOULD APPEAR IMMEDIATELY
+console.log("========================================");
+console.log("ISP Guard v2 - Background script LOADED");
+console.log("========================================");
+
 const SETTINGS_KEY = "ispGuard_settings";
 const DEFAULT_SETTINGS = {
   protectedDomains: [],
@@ -7,12 +12,8 @@ const DEFAULT_SETTINGS = {
   dynamicIP: false
 };
 
-const IP_APIS = [
-  "https://ipapi.co/json/",
-  "https://ipwho.is/"
-];
+const pendingChecks = new Set();
 
-// Validate IPv4 address format
 function isValidIPv4(ip) {
   if (!ip) return false;
   const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
@@ -24,120 +25,185 @@ function isValidIPv4(ip) {
   });
 }
 
-// Validate IPv6 address format
 function isValidIPv6(ip) {
   if (!ip) return false;
-  // Simple IPv6 validation - contains colons and hex characters
   return ip.includes(':') && /^[0-9a-fA-F:]+$/.test(ip);
 }
 
-async function getSettings() {
-  const { [SETTINGS_KEY]: s } = await chrome.storage.local.get(SETTINGS_KEY);
-  return { ...DEFAULT_SETTINGS, ...(s || {}) };
+function getSettings(callback) {
+  chrome.storage.local.get(SETTINGS_KEY, (result) => {
+    const settings = { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}) };
+    callback(settings);
+  });
 }
 
-async function saveSettings(obj) {
-  await chrome.storage.local.set({ [SETTINGS_KEY]: obj });
-}
+// HELPER FUNCTION - Call this from console to test
+window.testSetProtectedDomain = function(domain) {
+  chrome.storage.local.get(SETTINGS_KEY, (result) => {
+    const settings = { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}) };
+    if (!settings.protectedDomains.includes(domain)) {
+      settings.protectedDomains.push(domain);
+    }
+    chrome.storage.local.set({ [SETTINGS_KEY]: settings }, () => {
+      console.log("✓ Test domain added:", domain);
+      console.log("✓ New settings:", settings);
+    });
+  });
+};
 
-async function fetchIPData() {
-  let ipv4 = "";
-  let ipv6 = "";
-  let isp = "";
+// HELPER FUNCTION - View current settings
+window.viewSettings = function() {
+  chrome.storage.local.get(SETTINGS_KEY, (result) => {
+    console.log("Current settings:", result[SETTINGS_KEY] || "No settings saved");
+  });
+};
+
+console.log("🛠️ Test helpers available:");
+console.log("  viewSettings() - View current settings");
+console.log("  testSetProtectedDomain('globo.com') - Add a protected domain");
+
+async function fetchFromAPI(api, timeout = 3000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
   
-  // Try IPv4/ISP detection APIs
-  const ipv4Apis = [
+  try {
+    const res = await fetch(api.url, { 
+      cache: "no-store",
+      signal: controller.signal,
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      }
+    });
+    clearTimeout(timeoutId);
+    
+    if (!res.ok) return null;
+    const j = await res.json();
+    return api.parse(j);
+  } catch(e) {
+    clearTimeout(timeoutId);
+    return null;
+  }
+}
+
+// COMPREHENSIVE IP DETECTION - Same as options.js
+async function fetchIPData() {
+  console.log("🔍 Fetching IP data from multiple sources...");
+  
+  const apis = [
     {
+      name: "ipify",
       url: "https://api.ipify.org?format=json",
       parse: (j) => ({
-        ipv4: j.ip || "",
+        ipv4: j.ip && isValidIPv4(j.ip) ? j.ip : "",
+        ipv6: "",
         isp: ""
       })
     },
     {
+      name: "ipwho",
       url: "https://ipwho.is/",
       parse: (j) => ({
-        ipv4: j.ip || "",
+        ipv4: j.ip && isValidIPv4(j.ip) ? j.ip : "",
+        ipv6: j.ip && isValidIPv6(j.ip) ? j.ip : "",
         isp: j.connection?.isp || j.connection?.org || ""
       })
     },
     {
+      name: "ipapi",
       url: "https://ipapi.co/json/",
       parse: (j) => ({
-        ipv4: j.ip || "",
+        ipv4: j.ip && isValidIPv4(j.ip) ? j.ip : "",
+        ipv6: "",
         isp: j.org || j.isp || ""
       })
     },
     {
+      name: "ifconfig",
       url: "https://ifconfig.co/json",
       parse: (j) => ({
-        ipv4: j.ip_addr || j.ip || "",
+        ipv4: j.ip_addr && isValidIPv4(j.ip_addr) ? j.ip_addr : (j.ip && isValidIPv4(j.ip) ? j.ip : ""),
+        ipv6: j.ip && isValidIPv6(j.ip) ? j.ip : "",
         isp: j.asn_org || ""
       })
     }
   ];
   
-  for (const api of ipv4Apis) {
+  const promises = apis.map(api => fetchFromAPI(api));
+  
+  let ipv4 = "";
+  let ipv6 = "";
+  let isp = "";
+  let successCount = 0;
+  
+  for (const promise of promises) {
     try {
-      const res = await fetch(api.url, { cache: "no-store" });
-      if (!res.ok) continue;
-      const j = await res.json();
-      const data = api.parse(j);
+      const result = await promise;
       
-      // Validate that we got actual IPv4, not IPv6 in IPv4 field
-      if (data.ipv4 && isValidIPv4(data.ipv4)) {
-        ipv4 = data.ipv4;
-      }
-      if (data.isp) isp = data.isp;
-      if (ipv4 && isp) break;
-    } catch(e) {
-      console.log("IPv4 API failed:", api.url, e);
-    }
-  }
-  
-  // Try IPv6 detection
-  const ipv6Apis = [
-    "https://api64.ipify.org?format=json",
-    "https://ifconfig.co/json",
-    "https://api.ipify.org?format=json"
-  ];
-  
-  for (const url of ipv6Apis) {
-    try {
-      const res = await fetch(url, { cache: "no-store" });
-      if (!res.ok) continue;
-      const j = await res.json();
-      
-      // Validate that we got actual IPv6
-      if (j.ip && isValidIPv6(j.ip)) {
-        ipv6 = j.ip;
-        break;
-      }
-    } catch(e) {
-      console.log("IPv6 API failed:", url, e);
-    }
-  }
-  
-  // If we have an IP but no ISP, try to get ISP info
-  if (!isp && (ipv4 || ipv6)) {
-    try {
-      const checkIp = ipv4 || ipv6;
-      const res = await fetch(`https://ipwho.is/${checkIp}`, { cache: "no-store" });
-      if (res.ok) {
-        const j = await res.json();
-        if (j.connection?.isp || j.connection?.org) {
-          isp = j.connection.isp || j.connection.org;
+      if (result) {
+        successCount++;
+        
+        if (result.ipv4 && !ipv4) ipv4 = result.ipv4;
+        if (result.ipv6 && !ipv6) ipv6 = result.ipv6;
+        if (result.isp && !isp) isp = result.isp;
+        
+        if (successCount >= 2 && (ipv4 || ipv6)) {
+          break;
         }
       }
     } catch(e) {
-      console.log("ISP lookup failed:", e);
+      // Continue
+    }
+  }
+  
+  // Try IPv6 detection if we don't have it yet
+  if (!ipv6) {
+    try {
+      const ipv6Result = await fetchFromAPI({
+        name: "ipify64",
+        url: "https://api64.ipify.org?format=json",
+        parse: (j) => ({
+          ipv4: "",
+          ipv6: j.ip && isValidIPv6(j.ip) ? j.ip : "",
+          isp: ""
+        })
+      }, 2000);
+      
+      if (ipv6Result && ipv6Result.ipv6) {
+        ipv6 = ipv6Result.ipv6;
+      }
+    } catch(e) {
+      // Continue
+    }
+  }
+  
+  if (!isp && (ipv4 || ipv6)) {
+    try {
+      const checkIp = ipv4 || ipv6;
+      const ispResult = await fetchFromAPI({
+        name: "ipwho-isp",
+        url: `https://ipwho.is/${checkIp}`,
+        parse: (j) => ({
+          ipv4: "",
+          ipv6: "",
+          isp: j.connection?.isp || j.connection?.org || ""
+        })
+      }, 2000);
+      
+      if (ispResult && ispResult.isp) {
+        isp = ispResult.isp;
+      }
+    } catch(e) {
+      // Continue
     }
   }
   
   if (!ipv4 && !ipv6) {
-    throw new Error("IP check failed - no IP detected");
+    throw new Error("IP check failed - no valid IP detected");
   }
   
+  console.log("✓ IP data fetched:", { ipv4, ipv6, isp, successCount });
   return { ipv4, ipv6, isp };
 }
 
@@ -147,93 +213,171 @@ function hostnameMatches(entry, hostname) {
   return hostname === entry || hostname.endsWith("." + entry);
 }
 
-async function checkNetwork() {
-  const settings = await getSettings();
-  const info = await fetchIPData();
-  let ok = false;
+function checkNetwork(callback) {
+  getSettings((settings) => {
+    fetchIPData().then((info) => {
+      let ok = false;
 
-  if (settings.dynamicIP) {
-    // Dynamic IP mode: only check ISP
-    ok = info.isp.toLowerCase() === settings.refISP.toLowerCase();
-  } else {
-    // Static IP mode: check both ISP and IP address
-    const ispOk = info.isp.toLowerCase() === settings.refISP.toLowerCase();
-    
-    // Get reference IPs, excluding "-" placeholders
-    const refIPv4 = settings.refIPv4 && settings.refIPv4 !== "-" ? settings.refIPv4 : "";
-    const refIPv6 = settings.refIPv6 && settings.refIPv6 !== "-" ? settings.refIPv6 : "";
-    
-    // Get current IPs, excluding empty values
-    const currentIPv4 = info.ipv4 || "";
-    const currentIPv6 = info.ipv6 || "";
-    
-    let ipOk = false;
-    
-    // If we have both reference IPv4 and IPv6, at least one must match
-    if (refIPv4 && refIPv6) {
-      ipOk = (currentIPv4 === refIPv4) || (currentIPv6 === refIPv6);
-    }
-    // If we only have reference IPv4, it must match (ignore current IPv6)
-    else if (refIPv4 && !refIPv6) {
-      ipOk = currentIPv4 === refIPv4;
-    }
-    // If we only have reference IPv6, it must match (ignore current IPv4)
-    else if (!refIPv4 && refIPv6) {
-      ipOk = currentIPv6 === refIPv6;
-    }
-    // If we have no reference IPs saved, deny access
-    else {
-      ipOk = false;
-    }
-    
-    ok = ispOk && ipOk;
-  }
-  
-  return { info, ok, ref: settings };
+      if (settings.dynamicIP) {
+        ok = info.isp.toLowerCase() === settings.refISP.toLowerCase();
+      } else {
+        const ispOk = info.isp.toLowerCase() === settings.refISP.toLowerCase();
+        
+        const refIPv4 = settings.refIPv4 && settings.refIPv4 !== "-" ? settings.refIPv4 : "";
+        const refIPv6 = settings.refIPv6 && settings.refIPv6 !== "-" ? settings.refIPv6 : "";
+        
+        const currentIPv4 = info.ipv4 || "";
+        const currentIPv6 = info.ipv6 || "";
+        
+        let ipOk = false;
+        
+        if (refIPv4 && refIPv6) {
+          ipOk = (currentIPv4 === refIPv4) || (currentIPv6 === refIPv6);
+        } else if (refIPv4 && !refIPv6) {
+          ipOk = currentIPv4 === refIPv4;
+        } else if (!refIPv4 && refIPv6) {
+          ipOk = currentIPv6 === refIPv6;
+        } else {
+          ipOk = false;
+        }
+        
+        ok = ispOk && ipOk;
+      }
+      
+      console.log("🔍 Network check result:", { 
+        ok, 
+        currentIP: info, 
+        refIPv4: settings.refIPv4,
+        refIPv6: settings.refIPv6,
+        refISP: settings.refISP 
+      });
+      
+      callback({ info, ok, ref: settings });
+    }).catch((e) => {
+      callback({ error: e });
+    });
+  });
 }
 
 function isProtectedDomain(url, settings) {
   try {
     const u = new URL(url);
-    return settings.protectedDomains.some(d => hostnameMatches(d, u.hostname));
+    const isProtected = settings.protectedDomains.some(d => hostnameMatches(d, u.hostname));
+    console.log(`🔍 Domain check: ${u.hostname} → Protected: ${isProtected}`);
+    if (isProtected) {
+      console.log(`   Protected domains list:`, settings.protectedDomains);
+    }
+    return isProtected;
   } catch {
     return false;
   }
 }
 
-chrome.webNavigation.onBeforeNavigate.addListener(
-  async details => {
-    if (!details.frameId === 0) return; // Only main frame
+// ============================================
+// LISTENER: webRequest.onBeforeRequest
+// ============================================
+console.log("Registering webRequest.onBeforeRequest listener...");
+
+chrome.webRequest.onBeforeRequest.addListener(
+  function(details) {
+    console.log(">>> webRequest.onBeforeRequest FIRED:", details.url, "type:", details.type);
     
-    const settings = await getSettings();
-    if (!isProtectedDomain(details.url, settings)) return;
-
-    try {
-      const { info, ok, ref } = await checkNetwork();
-      if (ok) return;
-
-      // Encode the data to avoid exposing IPs in URL
-      const data = {
-        url: details.url,
-        ipv4: info.ipv4 || "-",
-        ipv6: info.ipv6 || "-",
-        isp: info.isp || "-",
-        refIPv4: ref.refIPv4 || "-",
-        refIPv6: ref.refIPv6 || "-",
-        refISP: ref.refISP || "-"
-      };
-      
-      const encoded = btoa(JSON.stringify(data));
-      const redirect = chrome.runtime.getURL("blocked.html?data=" + encodeURIComponent(encoded));
-      
-      chrome.tabs.update(details.tabId, { url: redirect });
-    } catch(e) {
-      console.error("ISP Guard check failed:", e);
+    // Only handle main frame
+    if (details.type !== "main_frame") {
+      return;
     }
-  }
+    
+    // Don't check extension pages
+    if (details.url.startsWith("chrome-extension://") || details.url.startsWith("chrome://")) {
+      return;
+    }
+    
+    const checkKey = `${details.tabId}-${details.url}`;
+    
+    if (pendingChecks.has(checkKey)) {
+      console.log("    Skipping: already checking");
+      return;
+    }
+    
+    pendingChecks.add(checkKey);
+    console.log("    ✓ Added to pending checks");
+    
+    // Get settings and check
+    getSettings((settings) => {
+      console.log("    → Settings loaded");
+      
+      const isProtected = isProtectedDomain(details.url, settings);
+      
+      if (!isProtected) {
+        console.log("    ✓ Not protected, allowing");
+        pendingChecks.delete(checkKey);
+        return;
+      }
+
+      console.log("    🔒 PROTECTED DOMAIN - Performing IP check...");
+      
+      checkNetwork((result) => {
+        if (result.error) {
+          console.error("    ❌ ERROR during check:", result.error);
+          const blockedUrl = chrome.runtime.getURL("blocked.html?error=check_failed");
+          chrome.tabs.update(details.tabId, { url: blockedUrl });
+          pendingChecks.delete(checkKey);
+          return;
+        }
+        
+        const { info, ok, ref } = result;
+        
+        if (ok) {
+          console.log("    ✓✓✓ IP CHECK PASSED - ACCESS ALLOWED");
+          console.log("    → Current:", info);
+          console.log("    → Reference:", { ipv4: ref.refIPv4, ipv6: ref.refIPv6, isp: ref.refISP });
+          pendingChecks.delete(checkKey);
+          return;
+        }
+        
+        console.log("    ✗✗✗ IP CHECK FAILED - BLOCKING ACCESS");
+        console.log("    → Current:", info);
+        console.log("    → Reference:", { ipv4: ref.refIPv4, ipv6: ref.refIPv6, isp: ref.refISP });
+        
+        const data = {
+          url: details.url,
+          ipv4: info.ipv4 || "-",
+          ipv6: info.ipv6 || "-",
+          isp: info.isp || "-",
+          refIPv4: ref.refIPv4 || "-",
+          refIPv6: ref.refIPv6 || "-",
+          refISP: ref.refISP || "-"
+        };
+        
+        const encoded = btoa(JSON.stringify(data));
+        const blockedUrl = chrome.runtime.getURL("blocked.html?data=" + encodeURIComponent(encoded));
+        
+        console.log("    → Redirecting to blocked page");
+        chrome.tabs.update(details.tabId, { url: blockedUrl });
+        pendingChecks.delete(checkKey);
+      });
+    });
+  },
+  { urls: ["<all_urls>"] },
+  ["blocking"]
 );
 
-// Handle extension icon click - open options page
-chrome.action.onClicked.addListener(() => {
+console.log("✓ webRequest listener registered");
+
+// Clean up
+setInterval(() => {
+  if (pendingChecks.size > 0) {
+    console.log("Clearing", pendingChecks.size, "pending checks");
+  }
+  pendingChecks.clear();
+}, 30000);
+
+// Handle icon click
+chrome.browserAction.onClicked.addListener(() => {
+  console.log("Extension icon clicked - opening options");
   chrome.runtime.openOptionsPage();
 });
+
+console.log("========================================");
+console.log("ISP Guard v2 - Ready!");
+console.log("========================================");
