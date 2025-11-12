@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Configurações do ISP Guard v2</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="page">
+  <div class="card">
+    <h1>Configuração do ISP Guard</h1>
+    <label>Domínios Protegidos (um por linha):</label>
+    <textarea id="domains" rows="4" placeholder="exemplo.com&#10;paypal.com"></textarea>
+    <div class="row">
+      <button id="detect">Detectar Rede Atual</button>
+    </div>
+    <div id="detected">
+      <p><b>IPv4 Detectado:</b> <span id="ipv4">-</span></p>
+      <p><b>IPv6 Detectado:</b> <span id="ipv6">-</span></p>
+      <p><b>ISP Detectado:</b> <span id="isp">-</span></p>
+    </div>
+
+    <label><input type="checkbox" id="dynamic"> Meu IP é dinâmico (verificar apenas ISP)</label>
+
+    <div class="buttons">
+      <button id="save">Salvar</button>
+    </div>
+
+    <div id="status"></div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>
